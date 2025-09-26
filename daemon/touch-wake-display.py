@@ -16,7 +16,7 @@ CONF_PATH = "/etc/touch-wake-display.conf"
 # ===== Defaults (can be overridden via config) =============================
 IDLE_SECONDS = 30
 BL_BASE = ""  # empty => auto-detect
-FORCE_MAX_ON_WAKE = True
+FORCE_MAX_ON_WAKE = False  # default disabled now
 RESCAN_INTERVAL = 2.0
 DEBUG = False
 # ===========================================================================
@@ -172,21 +172,32 @@ if not PATH_TO_DEV:
 asleep = False
 last_event_ts = time.time()
 last_rescan_ts = 0.0
+last_active_brightness = None  # stores last >0 brightness before sleep
 
 def wake_display():
-    global asleep
+    global asleep, last_active_brightness
     set_power(True)
-    if FORCE_MAX_ON_WAKE or read_brightness() <= 0:
+    if FORCE_MAX_ON_WAKE:
         set_brightness(MAX)
+    else:
+        # Restore previous brightness if available, else fallback to MAX
+        target = last_active_brightness if (last_active_brightness and last_active_brightness > 0) else MAX
+        # If current brightness already >0 (e.g. external wake) do not overwrite
+        if read_brightness() <= 0:
+            set_brightness(target)
     asleep = False
-    log("WAKE")
+    log("WAKE restore=", last_active_brightness, "force_max=", FORCE_MAX_ON_WAKE)
 
 def sleep_display():
-    global asleep
+    global asleep, last_active_brightness
+    # Capture current brightness before turning off
+    cur = read_brightness()
+    if cur > 0:
+        last_active_brightness = cur
     set_brightness(0)
     set_power(False)
     asleep = True
-    log("SLEEP")
+    log("SLEEP remember=", last_active_brightness)
 
 # Ensure display is not left dark at startup
 set_power(True)

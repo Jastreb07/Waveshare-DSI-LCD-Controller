@@ -4,6 +4,7 @@
 Backlight idle/wake daemon (single-file variant)
 - Dims (brightness=0) after inactivity
 - Wakes on touch / keyboard / mouse (optionally force max brightness)
+- Restores last active brightness when waking (if force_max_on_wake disabled)
 - Controls bl_power if available
 - No device grab; detects hotplug (USB keyboard/mouse)
 - Loads settings from /etc/touch-wake-display.conf
@@ -16,10 +17,11 @@ CONF_PATH = "/etc/touch-wake-display.conf"
 # ===== Defaults (overridden by config) =====================================
 IDLE_SECONDS = 30
 BL_BASE = "/sys/class/backlight/0-0045"  # adjust if needed (or set in config)
-FORCE_MAX_ON_WAKE = True
+FORCE_MAX_ON_WAKE = False  # default disabled now
 RESCAN_INTERVAL = 2.0
 DEBUG = False
 # ===========================================================================
+last_active_brightness = None  # remembers last >0 brightness prior to sleep
 
 def load_config():
     global IDLE_SECONDS, BL_BASE, FORCE_MAX_ON_WAKE, RESCAN_INTERVAL, DEBUG
@@ -168,19 +170,26 @@ last_event_ts = time.time()
 last_rescan_ts = 0.0
 
 def wake_display():
-    global asleep
+    global asleep, last_active_brightness
     set_power(True)
-    if FORCE_MAX_ON_WAKE or read_brightness() <= 0:
+    if FORCE_MAX_ON_WAKE:
         set_brightness(MAX)
+    else:
+        target = last_active_brightness if (last_active_brightness and last_active_brightness > 0) else MAX
+        if read_brightness() <= 0:
+            set_brightness(target)
     asleep = False
-    log("WAKE")
+    log("WAKE restore=", last_active_brightness, "force_max=", FORCE_MAX_ON_WAKE)
 
 def sleep_display():
-    global asleep
+    global asleep, last_active_brightness
+    cur = read_brightness()
+    if cur > 0:
+        last_active_brightness = cur
     set_brightness(0)
     set_power(False)
     asleep = True
-    log("SLEEP")
+    log("SLEEP remember=", last_active_brightness)
 
 # Ensure not dark at startup
 set_power(True)

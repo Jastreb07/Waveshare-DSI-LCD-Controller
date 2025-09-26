@@ -5,11 +5,12 @@ from tkinter import ttk, messagebox
 
 CONF_PATH = "/etc/touch-wake-display.conf"
 SERVICE = "touch-wake-display.service"
-
 SYSTEMCTL = "/usr/bin/systemctl"  # fixed path (sudoers rule depends on this)
 
+MIN_USER_BRIGHTNESS = 4  # Do not allow manual brightness below this raw value
+
 def load_config():
-    cfg = {"idle_seconds":"30", "bl_base":"", "force_max_on_wake":"true", "rescan_interval":"2.0", "debug":"false"}
+    cfg = {"idle_seconds":"30", "bl_base":"", "force_max_on_wake":"false", "rescan_interval":"2.0", "debug":"false"}
     if os.path.exists(CONF_PATH):
         p = configparser.ConfigParser()
         p.read(CONF_PATH)
@@ -103,7 +104,7 @@ class App(tk.Tk):
         self.brightness_status.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2,0))
         self._brightness_base = None
         self._brightness_path = None
-        self._brightness_max = 100
+        self._brightness_max = 100  # real max (raw) will be detected
         self._dragging = False
         self._brightness_poll_job = None
         self._last_write_error = False
@@ -165,21 +166,45 @@ class App(tk.Tk):
                 maxv = int(f.read().strip())
         except Exception:
             maxv = 255
-        self._brightness_max = maxv if maxv > 0 else 255
+        if maxv <= MIN_USER_BRIGHTNESS:
+            maxv = MIN_USER_BRIGHTNESS + 1
+        self._brightness_max = maxv
         self._brightness_path = bright
         self.brightness_scale.state(["!disabled"])
-        # Adjust scale range
-        self.brightness_scale.configure(from_=0, to=self._brightness_max)
-        cur = self._read_current_brightness()
-        if cur is not None:
-            self.brightness_scale.set(cur)
-            self.brightness_value_lbl.configure(text=f"{cur}/{self._brightness_max}")
-            self.brightness_status.configure(text=f"Path: {bright}")
+        # Slider is percentage 0..100
+        self.brightness_scale.configure(from_=0, to=100)
+        cur_raw = self._read_current_brightness()
+        if cur_raw is not None:
+            percent = self._raw_to_percent(cur_raw)
+            self.brightness_scale.set(percent)
+            self._update_brightness_label(percent, cur_raw)
+            sleep_tag = " (sleep)" if cur_raw == 0 else ""
+            self.brightness_status.configure(text=f"Path: {bright}{sleep_tag}")
         else:
             self.brightness_value_lbl.configure(text="-")
             self.brightness_status.configure(text=f"Path: {bright} (unreadable)")
         if initial:
             self._start_brightness_poll()
+
+    # --- Mapping helpers -----------------------------------------------------
+    def _raw_to_percent(self, raw: int) -> int:
+        if raw <= MIN_USER_BRIGHTNESS:
+            return 0
+        span = self._brightness_max - MIN_USER_BRIGHTNESS
+        if span <= 0:
+            return 0
+        return max(0, min(100, round((raw - MIN_USER_BRIGHTNESS) / span * 100)))
+
+    def _percent_to_raw(self, percent: float) -> int:
+        percent = max(0.0, min(100.0, float(percent)))
+        if percent <= 0:
+            # Enforce minimum (do not allow manual complete off)
+            return MIN_USER_BRIGHTNESS
+        span = self._brightness_max - MIN_USER_BRIGHTNESS
+        return MIN_USER_BRIGHTNESS + round((percent / 100.0) * span)
+
+    def _update_brightness_label(self, percent: float, raw: int):
+        self.brightness_value_lbl.configure(text=f"{int(round(percent))}% ({raw}/{self._brightness_max})")
 
     def _read_current_brightness(self):
         path = self._brightness_path
@@ -191,15 +216,15 @@ class App(tk.Tk):
         except Exception:
             return None
 
-    def _write_brightness(self, value: int):
+    def _write_brightness(self, percent_value: float):
         if not self._brightness_path:
             return
         try:
-            value = max(0, min(self._brightness_max, int(value)))
+            raw = self._percent_to_raw(percent_value)
             with open(self._brightness_path, 'w') as f:
-                f.write(str(value))
+                f.write(str(raw))
             self._last_write_error = False
-            self.brightness_value_lbl.configure(text=f"{value}/{self._brightness_max}")
+            self._update_brightness_label(percent_value, raw)
         except PermissionError:
             if not self._last_write_error:
                 messagebox.showerror("Permission denied", "Cannot write brightness. Ensure user is in group 'video'.")
@@ -211,7 +236,6 @@ class App(tk.Tk):
 
     def _on_brightness_drag(self, val):
         if self._dragging:
-            # Live update while dragging (throttled by Tk event rate)
             self._write_brightness(float(val))
 
     def _set_dragging(self, state: bool):
@@ -227,12 +251,14 @@ class App(tk.Tk):
         self._brightness_poll_job = self.after(2000, self._poll_brightness_loop)
 
     def _poll_brightness_loop(self):
-        cur = self._read_current_brightness()
-        if cur is not None and not self._dragging:
-            # Update slider if external change (daemon dim/wake) occurred
-            if int(self.brightness_scale.get()) != cur:
-                self.brightness_scale.set(cur)
-                self.brightness_value_lbl.configure(text=f"{cur}/{self._brightness_max}")
+        cur_raw = self._read_current_brightness()
+        if cur_raw is not None and not self._dragging:
+            percent = self._raw_to_percent(cur_raw)
+            if int(round(self.brightness_scale.get())) != int(percent):
+                self.brightness_scale.set(percent)
+            self._update_brightness_label(percent, cur_raw)
+            sleep_tag = " (sleep)" if cur_raw == 0 else ""
+            self.brightness_status.configure(text=f"Path: {self._brightness_path}{sleep_tag}")
         self._start_brightness_poll()
 
     def on_save(self):
