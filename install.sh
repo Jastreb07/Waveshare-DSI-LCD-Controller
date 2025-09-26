@@ -63,6 +63,22 @@ echo ">> systemd neu laden & Service aktivieren …"
 systemctl daemon-reload
 systemctl enable --now "$SERVICE_NAME"
 
+echo ">> Sudoers-Regel für systemctl restart $SERVICE_NAME anlegen (User: $TARGET_USER) …"
+SUDOERS_FILE="/etc/sudoers.d/touchwake"
+SUDOERS_LINE="$TARGET_USER ALL=NOPASSWD: /bin/systemctl restart $SERVICE_NAME"
+if [ ! -f "$SUDOERS_FILE" ]; then
+  echo "$SUDOERS_LINE" > "$SUDOERS_FILE"
+  chmod 0440 "$SUDOERS_FILE"
+  echo "   Sudoers-Regel angelegt: $SUDOERS_LINE"
+else
+  if ! grep -Fxq "$SUDOERS_LINE" "$SUDOERS_FILE"; then
+    echo "$SUDOERS_LINE" >> "$SUDOERS_FILE"
+    echo "   Sudoers-Regel ergänzt: $SUDOERS_LINE"
+  else
+    echo "   Sudoers-Regel existiert bereits."
+  fi
+fi
+
 echo ">> FERTIG. Einstellungen öffnen über:"
 echo "   Start → Accessories → Touch Wake Settings"
 echo "   oder:  pkexec /usr/bin/python3 $APP_DIR/touch-wake-settings.py"
