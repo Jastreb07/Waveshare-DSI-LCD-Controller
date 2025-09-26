@@ -1,0 +1,20 @@
+[Unit]
+Description=Turn off DSI backlight after idle; wake on touch/keyboard/mouse (Waveshare)
+After=multi-user.target
+Wants=multi-user.target
+
+[Service]
+Type=simple
+User=@@USER@@
+Group=@@GROUP@@
+SupplementaryGroups=video input
+ExecStart=/usr/bin/env python3 @@APP_DIR@@/touch-wake-display.py
+Restart=always
+RestartSec=2
+Nice=5
+# Logs gehen ins Journal
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
