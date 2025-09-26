@@ -2,7 +2,7 @@
 Type=Application
 Name=Touch Wake Settings
 Comment=Einstellungen für Touch/Keyboard/Maus gesteuerten Display-Schlaf
-Exec=pkexec /usr/bin/python3 /opt/waveshare-dsi-lcd-controller/touch-wake-settings.py
+Exec=/usr/bin/python3 /opt/waveshare-dsi-lcd-controller/touch-wake-settings.py
 Icon=touch-wake-settings
 Terminal=false
 Categories=Utility;Accessories;

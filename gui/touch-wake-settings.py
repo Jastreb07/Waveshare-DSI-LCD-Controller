@@ -6,6 +6,9 @@ from tkinter import ttk, messagebox
 CONF_PATH = "/etc/touch-wake-display.conf"
 SERVICE = "touch-wake-display.service"
 
+# Pfad zu systemctl (fix) – wichtig für sudoers Eintrag
+SYSTEMCTL = "/usr/bin/systemctl"
+
 def load_config():
     cfg = {"idle_seconds":"30", "bl_base":"", "force_max_on_wake":"true", "rescan_interval":"2.0", "debug":"false"}
     if os.path.exists(CONF_PATH):
@@ -27,11 +30,26 @@ def detect_backlight():
     return cands[0] if cands else ""
 
 def restart_service():
+    # Versuche ohne sudo (klappt, falls User Systemservice steuern darf oder user-service Variante)
     try:
-        subprocess.run(["systemctl","restart",SERVICE], check=True)
+        subprocess.run([SYSTEMCTL, "restart", SERVICE], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         return True
-    except Exception as e:
-        messagebox.showerror("Fehler", f"Service-Neustart fehlgeschlagen:\n{e}")
+    except subprocess.CalledProcessError as e1:
+        # Versuch mit sudo -n (passwortlos, gestattet durch sudoers Eintrag)
+        try:
+            subprocess.run(["sudo", "-n", SYSTEMCTL, "restart", SERVICE], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            return True
+        except subprocess.CalledProcessError as e2:
+            messagebox.showerror("Fehler", f"Service-Neustart fehlgeschlagen.\n\n" \
+                                  f"systemctl exit: {e1.returncode}; sudo/systemctl exit: {e2.returncode}\n" \
+                                  f"Prüfe sudoers-Eintrag: cat /etc/sudoers.d/touchwake\n" \
+                                  f"(Erwartet: <user> ALL=NOPASSWD: {SYSTEMCTL} restart {SERVICE})")
+            return False
+        except FileNotFoundError:
+            messagebox.showerror("Fehler", "sudo nicht gefunden – bitte sudo installieren oder Service manuell neu starten.")
+            return False
+    except FileNotFoundError:
+        messagebox.showerror("Fehler", f"{SYSTEMCTL} nicht gefunden.")
         return False
 
 def check_groups_label():
@@ -126,7 +144,7 @@ class App(tk.Tk):
         except PermissionError:
             messagebox.showerror("Rechte erforderlich",
                                  "Kann /etc/touch-wake-display.conf nicht schreiben.\n"
-                                 "Bitte über das Menü starten (fragt via pkexec nach Passwort).")
+                                 "Bitte erneut installieren: Datei sollte dem Benutzer gehören.")
             return
         except Exception as e:
             messagebox.showerror("Fehler", f"Speichern fehlgeschlagen:\n{e}")

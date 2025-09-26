@@ -28,7 +28,19 @@ install -m 0755 "$REPO_DIR/gui/touch-wake-settings.py" "$APP_DIR/touch-wake-sett
 echo ">> Config anlegen (falls fehlt): $CONF"
 if [ ! -f "$CONF" ]; then
   install -m 0644 "$REPO_DIR/config/touch-wake-display.conf" "$CONF"
+  # Eigentümer auf Ziel-User setzen, damit GUI ohne pkexec speichern kann
+  chown "$TARGET_USER:$TARGET_GROUP" "$CONF"
+else
+  # Falls bereits existiert und root gehört, einmalig Besitz übernehmen (idempotent)
+  OWNER="$(stat -c %U "$CONF" 2>/dev/null || echo root)"
+  if [ "$OWNER" != "$TARGET_USER" ]; then
+    echo "   Setze Eigentümer von $CONF auf $TARGET_USER:$TARGET_GROUP (vorher: $OWNER)"
+    chown "$TARGET_USER:$TARGET_GROUP" "$CONF" || echo "WARN: chown fehlgeschlagen"
+  fi
 fi
+
+# Optional: Schreibrechte Gruppe/User sicherstellen
+chmod 0644 "$CONF" || true
 
 echo ">> Service-Datei erzeugen für User: $TARGET_USER"
 # Service aus Template bauen
@@ -65,20 +77,29 @@ systemctl enable --now "$SERVICE_NAME"
 
 echo ">> Sudoers-Regel für systemctl restart $SERVICE_NAME anlegen (User: $TARGET_USER) …"
 SUDOERS_FILE="/etc/sudoers.d/touchwake"
-SUDOERS_LINE="$TARGET_USER ALL=NOPASSWD: /bin/systemctl restart $SERVICE_NAME"
+# Korrigierter Pfad: systemctl liegt auf Debian/RPi OS i.d.R. unter /usr/bin
+SUDOERS_LINE="$TARGET_USER ALL=NOPASSWD: /usr/bin/systemctl restart $SERVICE_NAME"
+OLD_LINE="$TARGET_USER ALL=NOPASSWD: /bin/systemctl restart $SERVICE_NAME"
 if [ ! -f "$SUDOERS_FILE" ]; then
   echo "$SUDOERS_LINE" > "$SUDOERS_FILE"
   chmod 0440 "$SUDOERS_FILE"
   echo "   Sudoers-Regel angelegt: $SUDOERS_LINE"
 else
+  # Entferne ggf. alte falsche Zeile /bin/systemctl
+  if grep -Fq "$OLD_LINE" "$SUDOERS_FILE"; then
+    echo "   Entferne alte /bin/systemctl Zeile"
+    grep -Fv "$OLD_LINE" "$SUDOERS_FILE" >"${SUDOERS_FILE}.tmp" && mv "${SUDOERS_FILE}.tmp" "$SUDOERS_FILE"
+  fi
   if ! grep -Fxq "$SUDOERS_LINE" "$SUDOERS_FILE"; then
     echo "$SUDOERS_LINE" >> "$SUDOERS_FILE"
     echo "   Sudoers-Regel ergänzt: $SUDOERS_LINE"
   else
-    echo "   Sudoers-Regel existiert bereits."
+    echo "   Sudoers-Regel existiert bereits (korrekt)."
   fi
 fi
 
+visudo -cf "$SUDOERS_FILE" >/dev/null 2>&1 || echo "WARN: visudo Validation fehlgeschlagen (bitte prüfen)"
+
 echo ">> FERTIG. Einstellungen öffnen über:"
 echo "   Start → Accessories → Touch Wake Settings"
-echo "   oder:  pkexec /usr/bin/python3 $APP_DIR/touch-wake-settings.py"
+echo "   oder:  /usr/bin/python3 $APP_DIR/touch-wake-settings.py"
