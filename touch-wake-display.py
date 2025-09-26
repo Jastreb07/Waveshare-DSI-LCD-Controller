@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Backlight-Idle/Wake Daemon (CM5 + Waveshare 8-DSI-TOUCH-A) mit Hotplug + Config
-- Dimmt nach Inaktivität (Brightness=0)
-- Wake bei Touch/Keyboard/Mouse (optional: immer maximale Helligkeit)
-- Steuert bl_power (falls vorhanden)
-- KEIN grab(); erkennt Hotplug (USB Tastatur/Maus)
-- Lädt Einstellungen aus /etc/touch-wake-display.conf
+Backlight idle/wake daemon (single-file variant)
+- Dims (brightness=0) after inactivity
+- Wakes on touch / keyboard / mouse (optionally force max brightness)
+- Controls bl_power if available
+- No device grab; detects hotplug (USB keyboard/mouse)
+- Loads settings from /etc/touch-wake-display.conf
 """
 
 import os, time, signal, select, glob, configparser
 
 CONF_PATH = "/etc/touch-wake-display.conf"
 
-# ======= Defaults (werden durch Config überschrieben) =========================
+# ===== Defaults (overridden by config) =====================================
 IDLE_SECONDS = 30
-BL_BASE = "/sys/class/backlight/0-0045"  # passe bei Bedarf an
+BL_BASE = "/sys/class/backlight/0-0045"  # adjust if needed (or set in config)
 FORCE_MAX_ON_WAKE = True
 RESCAN_INTERVAL = 2.0
 DEBUG = False
-# ============================================================================
+# ===========================================================================
 
 def load_config():
     global IDLE_SECONDS, BL_BASE, FORCE_MAX_ON_WAKE, RESCAN_INTERVAL, DEBUG
@@ -39,16 +39,16 @@ load_config()
 try:
     from evdev import InputDevice, ecodes  # type: ignore
 except Exception:
-    print("Fehlt evdev? -> sudo apt install -y python3-evdev")
+    print("Missing evdev? -> sudo apt install -y python3-evdev")
     raise
 
 def log(*a):
     if DEBUG:
         print(time.strftime("%H:%M:%S"), *a, flush=True)
 
-# --- Backlight/Power ---------------------------------------------------------
+# --- Backlight / Power ------------------------------------------------------
 if not os.path.isdir(BL_BASE):
-    raise SystemExit(f"Backlight-Gerät nicht gefunden: {BL_BASE}")
+    raise SystemExit(f"Backlight device not found: {BL_BASE}")
 
 BL_BRIGHTNESS = os.path.join(BL_BASE, "brightness")
 BL_MAX_PATH   = os.path.join(BL_BASE, "max_brightness")
@@ -63,7 +63,7 @@ def set_power(on: bool):
     if os.path.exists(BL_POWER_PATH):
         try:
             with open(BL_POWER_PATH, 'w') as f:
-                f.write('0' if on else '4')  # 0=an, 4=aus
+                f.write('0' if on else '4')  # 0=on, 4=off
             log("bl_power ->", 0 if on else 4)
         except Exception as e:
             log("WARN set_power:", e)
@@ -83,7 +83,7 @@ def set_brightness(val: int):
     except Exception as e:
         log("ERROR set_brightness:", e)
 
-# --- Geräteklassifizierung ---------------------------------------------------
+# --- Device classification --------------------------------------------------
 def is_touchscreen(dev) -> bool:
     name = (dev.name or "").lower()
     if 'touch' in name or 'goodix' in name:
@@ -104,16 +104,17 @@ def is_keyboard_or_mouse(dev) -> bool:
     return is_mouse or is_kbd
 
 RELEVANT_TYPES = {ecodes.EV_KEY, ecodes.EV_REL, ecodes.EV_ABS}
+
 def is_relevant_event(e):
     if e.type == ecodes.EV_KEY:
-        return e.value in (1, 2)
+        return e.value in (1, 2)  # press/repeat
     if e.type == ecodes.EV_REL:
-        return True
+        return True               # mouse movement
     if e.type == ecodes.EV_ABS:
-        return True
+        return True               # touch coordinates
     return False
 
-# --- Hotplug-Verwaltung ------------------------------------------------------
+# --- Hotplug management -----------------------------------------------------
 poller = select.poll()
 FD_TO_DEV = {}
 PATH_TO_DEV = {}
@@ -156,12 +157,12 @@ def rescan_devices():
     for p in sorted(glob.glob('/dev/input/event*')):
         register_device_path(p)
 
-# Erste Registrierung
+# Initial registration
 rescan_devices()
 if not PATH_TO_DEV:
-    raise SystemExit("Keine passenden /dev/input/event* Geräte gefunden.")
+    raise SystemExit("No matching /dev/input/event* devices found.")
 
-# --- Idle/Wake ---------------------------------------------------------------
+# --- Idle / Wake ------------------------------------------------------------
 asleep = False
 last_event_ts = time.time()
 last_rescan_ts = 0.0
@@ -181,13 +182,14 @@ def sleep_display():
     asleep = True
     log("SLEEP")
 
-# Beim Start: sicherstellen, dass es nicht dunkel bleibt
+# Ensure not dark at startup
 set_power(True)
 if read_brightness() <= 0:
     set_brightness(MAX)
 
-# --- Signal Handling ---------------------------------------------------------
+# --- Signal handling --------------------------------------------------------
 _running = True
+
 def _stop(*_):
     global _running
     _running = False
@@ -196,7 +198,7 @@ signal.signal(signal.SIGINT, _stop)
 
 log(f"RUN idle={IDLE_SECONDS}s, rescan={RESCAN_INTERVAL}s, max={MAX}, path={BL_BASE}, debug={DEBUG}")
 
-# --- Hauptschleife -----------------------------------------------------------
+# --- Main loop --------------------------------------------------------------
 while _running:
     now = time.time()
     if now - last_rescan_ts >= RESCAN_INTERVAL:

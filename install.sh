@@ -12,94 +12,92 @@ SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME"
 DESKTOP_FILE_SRC="$REPO_DIR/desktop/touch-wake-settings.desktop"
 DESKTOP_FILE_DST="/usr/share/applications/touch-wake-settings.desktop"
 
-# Ermittel den Ziel-User (der gerade installiert) – nicht root
+# Determine target user (invoking user) – not root
 TARGET_USER="${SUDO_USER:-${USER}}"
 TARGET_GROUP="$(id -gn "$TARGET_USER")"
 
-echo ">> Installiere Pakete (python3, evdev, tkinter, policykit-1)…"
+echo ">> Installing packages (python3, evdev, tkinter, policykit-1)…"
 apt-get update -y
 apt-get install -y python3 python3-evdev python3-tk policykit-1
 
-echo ">> Kopiere Dateien nach $APP_DIR …"
+echo ">> Copying application files to $APP_DIR …"
 mkdir -p "$APP_DIR"
 install -m 0755 "$REPO_DIR/daemon/touch-wake-display.py" "$APP_DIR/touch-wake-display.py"
 install -m 0755 "$REPO_DIR/gui/touch-wake-settings.py" "$APP_DIR/touch-wake-settings.py"
 
-echo ">> Config anlegen (falls fehlt): $CONF"
+echo ">> Ensuring config file exists: $CONF"
 if [ ! -f "$CONF" ]; then
   install -m 0644 "$REPO_DIR/config/touch-wake-display.conf" "$CONF"
-  # Eigentümer auf Ziel-User setzen, damit GUI ohne pkexec speichern kann
+  # Make the user owner so GUI can save without pkexec
   chown "$TARGET_USER:$TARGET_GROUP" "$CONF"
 else
-  # Falls bereits existiert und root gehört, einmalig Besitz übernehmen (idempotent)
   OWNER="$(stat -c %U "$CONF" 2>/dev/null || echo root)"
   if [ "$OWNER" != "$TARGET_USER" ]; then
-    echo "   Setze Eigentümer von $CONF auf $TARGET_USER:$TARGET_GROUP (vorher: $OWNER)"
-    chown "$TARGET_USER:$TARGET_GROUP" "$CONF" || echo "WARN: chown fehlgeschlagen"
+    echo "   Changing owner of $CONF to $TARGET_USER:$TARGET_GROUP (before: $OWNER)"
+    chown "$TARGET_USER:$TARGET_GROUP" "$CONF" || echo "WARN: chown failed"
   fi
 fi
 
-# Optional: Schreibrechte Gruppe/User sicherstellen
+# Ensure readable by user/group
 chmod 0644 "$CONF" || true
 
-echo ">> Service-Datei erzeugen für User: $TARGET_USER"
-# Service aus Template bauen
+echo ">> Generating service file for user: $TARGET_USER"
+# Build service from template
 sed \
   -e "s|@@APP_DIR@@|$APP_DIR|g" \
   -e "s|@@USER@@|$TARGET_USER|g" \
   -e "s|@@GROUP@@|$TARGET_GROUP|g" \
   "$SERVICE_TMPL" > "$SERVICE_FILE"
 
-echo ">> Menüeintrag installieren …"
+echo ">> Installing desktop entry …"
 install -m 0644 "$DESKTOP_FILE_SRC" "$DESKTOP_FILE_DST"
 
-echo ">> Icon installieren …"
+echo ">> Installing icon …"
 ICON_SRC="$REPO_DIR/icons/touch-wake-settings.png"
 ICON_DST="/usr/share/pixmaps/touch-wake-settings.png"
 if [ -f "$ICON_SRC" ]; then
   install -m 0644 "$ICON_SRC" "$ICON_DST"
 else
-  echo "WARN: Icon nicht gefunden: $ICON_SRC"
+  echo "WARN: Icon not found: $ICON_SRC"
 fi
 
-echo ">> Gruppenrechte setzen (video,input) für $TARGET_USER"
+echo ">> Adding user $TARGET_USER to groups video,input (if not already) …"
 usermod -aG video,input "$TARGET_USER" || true
 
-echo ">> Udev-Regel (Backlight-Schreiben für Gruppe video) …"
+echo ">> Writing udev rule (group write access to brightness for group video) …"
 cat >/etc/udev/rules.d/99-backlight-perm.rules <<'RULE'
 SUBSYSTEM=="backlight", RUN+="/bin/chgrp video /sys/class/backlight/%k/brightness", RUN+="/bin/chmod g+w /sys/class/backlight/%k/brightness"
 RULE
 udevadm control --reload-rules || true
 
-echo ">> systemd neu laden & Service aktivieren …"
+echo ">> Reloading systemd and enabling service …"
 systemctl daemon-reload
 systemctl enable --now "$SERVICE_NAME"
 
-echo ">> Sudoers-Regel für systemctl restart $SERVICE_NAME anlegen (User: $TARGET_USER) …"
+echo ">> Creating sudoers rule for systemctl restart $SERVICE_NAME (user: $TARGET_USER) …"
 SUDOERS_FILE="/etc/sudoers.d/touchwake"
-# Korrigierter Pfad: systemctl liegt auf Debian/RPi OS i.d.R. unter /usr/bin
+# Correct path: systemctl typically at /usr/bin on Debian/RPi OS
 SUDOERS_LINE="$TARGET_USER ALL=NOPASSWD: /usr/bin/systemctl restart $SERVICE_NAME"
 OLD_LINE="$TARGET_USER ALL=NOPASSWD: /bin/systemctl restart $SERVICE_NAME"
 if [ ! -f "$SUDOERS_FILE" ]; then
   echo "$SUDOERS_LINE" > "$SUDOERS_FILE"
   chmod 0440 "$SUDOERS_FILE"
-  echo "   Sudoers-Regel angelegt: $SUDOERS_LINE"
+  echo "   Added sudoers rule: $SUDOERS_LINE"
 else
-  # Entferne ggf. alte falsche Zeile /bin/systemctl
   if grep -Fq "$OLD_LINE" "$SUDOERS_FILE"; then
-    echo "   Entferne alte /bin/systemctl Zeile"
+    echo "   Removing outdated /bin/systemctl line"
     grep -Fv "$OLD_LINE" "$SUDOERS_FILE" >"${SUDOERS_FILE}.tmp" && mv "${SUDOERS_FILE}.tmp" "$SUDOERS_FILE"
   fi
   if ! grep -Fxq "$SUDOERS_LINE" "$SUDOERS_FILE"; then
     echo "$SUDOERS_LINE" >> "$SUDOERS_FILE"
-    echo "   Sudoers-Regel ergänzt: $SUDOERS_LINE"
+    echo "   Added missing sudoers rule: $SUDOERS_LINE"
   else
-    echo "   Sudoers-Regel existiert bereits (korrekt)."
+    echo "   Sudoers rule already present."
   fi
 fi
 
-visudo -cf "$SUDOERS_FILE" >/dev/null 2>&1 || echo "WARN: visudo Validation fehlgeschlagen (bitte prüfen)"
+visudo -cf "$SUDOERS_FILE" >/dev/null 2>&1 || echo "WARN: visudo validation failed (please verify manually)"
 
-echo ">> FERTIG. Einstellungen öffnen über:"
-echo "   Start → Accessories → Touch Wake Settings"
-echo "   oder:  /usr/bin/python3 $APP_DIR/touch-wake-settings.py"
+echo ">> DONE. Launch settings via:"
+echo "   Menu → Accessories → Touch Wake Settings"
+echo "   Or: /usr/bin/python3 $APP_DIR/touch-wake-settings.py"

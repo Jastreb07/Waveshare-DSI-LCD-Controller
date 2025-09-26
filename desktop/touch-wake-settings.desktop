@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Touch Wake Settings
-Comment=Einstellungen für Touch/Keyboard/Maus gesteuerten Display-Schlaf
+Comment=Configure inactivity-based backlight sleep and wake by touch / keyboard / mouse
 Exec=/usr/bin/python3 /opt/waveshare-dsi-lcd-controller/touch-wake-settings.py
 Icon=touch-wake-settings
 Terminal=false
